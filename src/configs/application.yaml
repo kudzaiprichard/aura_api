@@ -1,0 +1,215 @@
+# ============================================================
+# Application Configuration
+# ============================================================
+# Format: "${ENV_VAR:default} | type"
+# Required: "${ENV_VAR} | type | required"
+# Static:   "value | type"
+# Types:    str, int, float, bool, list
+
+application:
+  name: "${APP_NAME:AuraAPI} | str"
+  version: "${APP_VERSION:0.1.0} | str"
+  debug: "${DEBUG:false} | bool"
+  environment: "${ENVIRONMENT:development} | str"
+
+database:
+  url: "${DATABASE_URL} | str | required"
+  pool_size: "${DB_POOL_SIZE:5} | int"
+  max_overflow: "${DB_MAX_OVERFLOW:10} | int"
+  pool_timeout: "${DB_POOL_TIMEOUT:30} | int"
+  echo: "${DB_ECHO:false} | bool"
+  pool_pre_ping: "true | bool"
+  pool_recycle: "1800 | int"
+
+security:
+  jwt:
+    # Validated at runtime when the auth code first runs (see token_provider.py)
+    # so that alembic migrations can run without a JWT secret configured.
+    secret_key: "${JWT_SECRET_KEY:} | str"
+    algorithm: "${JWT_ALGORITHM:HS256} | str"
+    access_token_expire_minutes: "${ACCESS_TOKEN_EXPIRE_MINUTES:30} | int"
+    refresh_token_expire_days: "${REFRESH_TOKEN_EXPIRE_DAYS:7} | int"
+  admin:
+    email: "${ADMIN_EMAIL:admin@aura.local} | str"
+    username: "${ADMIN_USERNAME:admin} | str"
+    first_name: "${ADMIN_FIRST_NAME:System} | str"
+    last_name: "${ADMIN_LAST_NAME:Admin} | str"
+    # Validated at runtime by admin_seeder so alembic can run without it set.
+    password: "${ADMIN_PASSWORD:} | str"
+  password:
+    bcrypt_rounds: "${BCRYPT_ROUNDS:12} | int"
+  token_cleanup_interval_seconds: "${TOKEN_CLEANUP_INTERVAL_SECONDS:3600} | int"
+  # Chrome extension install token lifetime + cleanup loop interval.
+  # Tokens are opaque random strings (SHA-256 hashed at rest); the extension
+  # silently renews within 5 days of expiry per the wire contract.
+  extension_token_expire_days: "${EXTENSION_TOKEN_EXPIRE_DAYS:30} | int"
+  extension_token_cleanup_interval_seconds: "${EXTENSION_TOKEN_CLEANUP_INTERVAL_SECONDS:3600} | int"
+
+server:
+  cors:
+    # The browser CORS spec forbids combining "*" origins with credentials=true,
+    # so the default origin list is a concrete localhost set rather than "*".
+    origins: "${CORS_ORIGINS:http://localhost:3000} | list"
+    allow_credentials: "${CORS_ALLOW_CREDENTIALS:true} | bool"
+    allow_methods: "${CORS_ALLOW_METHODS:*} | list"
+    allow_headers: "${CORS_ALLOW_HEADERS:*} | list"
+  rate_limit:
+    enabled: "${RATE_LIMIT_ENABLED:true} | bool"
+    login: "${RATE_LIMIT_LOGIN:5/minute} | str"
+    register: "${RATE_LIMIT_REGISTER:3/minute} | str"
+    refresh: "${RATE_LIMIT_REFRESH:10/minute} | str"
+    predict: "${RATE_LIMIT_PREDICT:60/minute} | str"
+    predict_batch: "${RATE_LIMIT_PREDICT_BATCH:10/minute} | str"
+    # Chrome extension surface — keys/values are shared verbatim across both
+    # backends (see docs/EXTENSION_IMPLEMENTATION_STANDARD.md §7).
+    extension_register: "${RATE_LIMIT_EXTENSION_REGISTER:3/minute} | str"
+    extension_renew: "${RATE_LIMIT_EXTENSION_RENEW:10/minute} | str"
+    extension_predict: "${RATE_LIMIT_EXTENSION_PREDICT:60/minute} | str"
+
+logging:
+  level: "${LOG_LEVEL:INFO} | str"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s | str"
+  file_path: "${LOG_FILE_PATH:logs/app.log} | str"
+
+inference:
+  models_dir: "${AURA_MODELS_DIR:./models} | str"
+  calibrator_path: "${AURA_CALIBRATOR_PATH:} | str"
+  decision_threshold: "${AURA_DECISION_THRESHOLD:0.75} | float"
+  # Chrome extension `should_alert` cutoff — phishing_probability >= this
+  # AND predicted_label == "SPAM" trips the HIGH-risk popover.
+  alert_threshold: "${AURA_ALERT_THRESHOLD:0.90} | float"
+  emails:
+    # Hard cap on the projected (text or HTML-stripped) body bytes a single
+    # /api/v1/emails/analyze call may carry. Exceed → 400 BAD_REQUEST.
+    max_body_bytes: "${AURA_EMAIL_MAX_BODY_BYTES:102400} | int"
+  review:
+    low_threshold: "${AURA_REVIEW_LOW:0.3} | float"
+    high_threshold: "${AURA_REVIEW_HIGH:0.8} | float"
+  drift:
+    log_path: "${AURA_DRIFT_LOG:./logs/drift.jsonl} | str"
+    fpr_threshold: "${AURA_DRIFT_FPR_THRESHOLD:0.10} | float"
+  auto_reviewer:
+    provider: "${AURA_REVIEW_PROVIDER:} | str"
+    api_key: "${AURA_REVIEW_API_KEY:} | str"
+    model_name: "${AURA_REVIEW_MODEL:} | str"
+    timeout_seconds: "${AURA_REVIEW_TIMEOUT:30.0} | float"
+    max_retries: "${AURA_REVIEW_MAX_RETRIES:2} | int"
+    # Phase 12 — short-TTL LRU for repeat auto-review calls on the same
+    # (sender, subject, body, model_name). Disabled by default; when on,
+    # only successful verdicts are cached (failures are never memoised so
+    # a transient upstream error always re-calls the provider).
+    cache_enabled: "${AURA_REVIEW_CACHE_ENABLED:false} | bool"
+    cache_ttl_seconds: "${AURA_REVIEW_CACHE_TTL:600} | int"
+    cache_max_size: "${AURA_REVIEW_CACHE_MAX:256} | int"
+  batch:
+    max_emails_per_request: "${AURA_BATCH_MAX:500} | int"
+  # Phase 12 — shadow predictions. When enabled, each `activate` captures
+  # the prior detector in-memory and keeps it alive for `days` so that
+  # /predict also records the shadow version's output on the same row
+  # (shadow_* columns on prediction_events). The shadow verdict is never
+  # acted on — it never feeds drift, never enqueues review, never feeds
+  # the training buffer.
+  shadow:
+    enabled: "${AURA_SHADOW_ENABLED:false} | bool"
+    days: "${AURA_SHADOW_DAYS:7} | int"
+  # Phase 12 — top-k TF-IDF term highlights in `/predictions/{id}/explain`.
+  # Off by default; when on, the explain response adds a `topTerms` array
+  # per (subject, body) derived from the active detector's vectorisers and
+  # classifier weights. No re-prediction — the label/probability on the row
+  # is authoritative.
+  explain:
+    tfidf_topk_enabled: "${AURA_EXPLAIN_TOPK_ENABLED:false} | bool"
+    tfidf_topk: "${AURA_EXPLAIN_TOPK:10} | int"
+  # Phase 12 — hardening. Signed uploads require an HMAC-SHA256 of the
+  # uploaded SHA-256 hex digest, using `upload_hmac_secret`. Pickle sandbox
+  # unpickles the uploaded artefact in a short-lived subprocess with an
+  # import-graph smoke check so a malicious payload cannot touch the API
+  # process state.
+  upload:
+    require_signature: "${AURA_UPLOAD_REQUIRE_SIGNATURE:false} | bool"
+    hmac_secret: "${AURA_UPLOAD_HMAC_SECRET:} | str"
+    pickle_sandbox_enabled: "${AURA_UPLOAD_PICKLE_SANDBOX:false} | bool"
+    pickle_sandbox_timeout_seconds: "${AURA_UPLOAD_PICKLE_SANDBOX_TIMEOUT:15.0} | float"
+
+training:
+  min_batch_size: "${TRAINING_MIN_BATCH:200} | int"
+  min_per_class: "${TRAINING_MIN_PER_CLASS:10} | int"
+  require_balance_delta: "${TRAINING_BALANCE_DELTA:0.4} | float"
+  holdout_path: "${AURA_HOLDOUT_DIR:./models/holdout} | str"
+  csv_max_bytes: "${TRAINING_CSV_MAX_BYTES:52428800} | int"
+  csv_max_rows: "${TRAINING_CSV_MAX_ROWS:50000} | int"
+  # Hard cap on partial_fit iterations per OnlineLearner call — NOTEBOOK_CONTRACT
+  # §3.2 caps iterations to prevent runaway online-learning loops.
+  max_iter_per_call: "${TRAINING_MAX_ITER_PER_CALL:15} | int"
+  # Phase 12 — buffer quality gate. When enabled, items with a combined
+  # (subject + body) out-of-vocabulary rate above `max_oov_rate` are
+  # rejected at enqueue time and on CSV import. Uses the active detector's
+  # vectorisers — no gate runs when no detector is loaded.
+  quality_gate:
+    enabled: "${TRAINING_QUALITY_GATE_ENABLED:false} | bool"
+    max_oov_rate: "${TRAINING_QUALITY_GATE_MAX_OOV:0.8} | float"
+
+review:
+  assignment_strategy: "${REVIEW_ASSIGNMENT:round_robin} | str"
+  auto_review_batch_max: "${REVIEW_AUTO_BATCH_MAX:5} | int"
+  # SLA threshold used by the dashboards to count "breached" review items
+  # (pending items older than this). Defaults to 24h; admins may override
+  # per-request via the `slaSeconds` query param on both dashboard endpoints.
+  sla_seconds: "${REVIEW_SLA_SECONDS:86400} | int"
+  # Phase 12 — rejection sampler. When enabled and `sample_rate` < 1.0,
+  # non-sampled REVIEW-zone enqueues are auto-resolved rather than landing
+  # in the analyst queue. `policy=auto_confirm` picks the verdict by
+  # probability (>= 0.5 → PHISHING); `policy=defer` parks the item as
+  # DEFERRED for later triage.
+  rejection_sampler:
+    enabled: "${REVIEW_REJECTION_SAMPLER_ENABLED:false} | bool"
+    sample_rate: "${REVIEW_REJECTION_SAMPLER_RATE:1.0} | float"
+    policy: "${REVIEW_REJECTION_SAMPLER_POLICY:auto_confirm} | str"
+  # Phase 12 — reviewer agreement check. When enabled, an admin resolution
+  # of an escalation whose analyst recorded a `tentativeLabel` different
+  # from the admin verdict writes a `review_disagreements` row for audit.
+  disagreement_log:
+    enabled: "${REVIEW_DISAGREEMENT_LOG_ENABLED:false} | bool"
+
+benchmark:
+  # Hard caps on CSV uploads to /api/v1/benchmarks/datasets. Mirrors the
+  # training buffer import surface; oversize files are rejected with 413
+  # before parsing and the row cap aborts ingestion once exceeded.
+  csv_max_bytes: "${BENCHMARK_CSV_MAX_BYTES:52428800} | int"
+  csv_max_rows: "${BENCHMARK_CSV_MAX_ROWS:50000} | int"
+  # Upper bound on versions per run so a single request can't spin up an
+  # unbounded number of per-version loads. Each version still loads a fresh
+  # PhishingDetector — the app.state singleton is never touched (§8.7).
+  max_versions_per_run: "${BENCHMARK_MAX_VERSIONS_PER_RUN:10} | int"
+  # Expected-calibration-error bin count. Higher = tighter gap estimate but
+  # more variance on small datasets; 10 matches the common literature default.
+  ece_num_bins: "${BENCHMARK_ECE_NUM_BINS:10} | int"
+
+sse:
+  # Heartbeat keep-alive interval. Doubles as the disconnect-detection budget:
+  # a dead client is unsubscribed within roughly one heartbeat tick.
+  heartbeat_seconds: "${SSE_HEARTBEAT_SECONDS:15.0} | float"
+  # Bounded per-subscriber queue. When full, the oldest events are dropped so
+  # a slow client cannot stall the broker fan-out for everyone else.
+  subscriber_queue_max: "${SSE_SUBSCRIBER_QUEUE_MAX:256} | int"
+  # Per-topic ring buffer used to honour Last-Event-ID on resubscribe. Set to
+  # 0 to disable replay entirely (broker becomes pure fan-out).
+  replay_window_size: "${SSE_REPLAY_WINDOW_SIZE:128} | int"
+  # The /api/v1/system/sse-echo smoke endpoint is feature-flagged off by
+  # default — flipping this to true exposes it (admin-only) for diagnostics.
+  echo_enabled: "${SSE_ECHO_ENABLED:false} | bool"
+
+# Chrome extension surface — kept separate from `server.cors` so widening the
+# extension allow-list never accidentally widens the dashboard's. The two
+# origin lists are concatenated when CORSMiddleware is constructed; the
+# chrome-extension://<id> origin is matched via allow_origin_regex.
+extension:
+  cors_origins: "${EXTENSION_CORS_ORIGINS:https://mail.google.com} | list"
+  allowlist_domains: "${EXTENSION_ALLOWLIST_DOMAINS:} | list"
+  allowlist_emails: "${EXTENSION_ALLOWLIST_EMAILS:} | list"
+  blocklist_domains: "${EXTENSION_BLOCKLIST_DOMAINS:} | list"
+  blocklist_emails: "${EXTENSION_BLOCKLIST_EMAILS:} | list"
+  google_oauth:
+    # Optional — when set, the tokeninfo audience must equal this value;
+    # blank skips the audience check (userinfo response is still verified).
+    client_id: "${EXTENSION_GOOGLE_OAUTH_CLIENT_ID:} | str"
